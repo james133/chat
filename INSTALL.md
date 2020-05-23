@@ -28,21 +28,31 @@ See [instructions](./docker/README.md)
 
 1. Install [Go environment](https://golang.org/doc/install). Make sure Go version is at least 1.9. Building with Go 1.8 or below **will fail**!
 
-2. Make sure either [RethinkDB](https://www.rethinkdb.com/docs/install/) or MySQL (or MariaDB or Percona) is installed and running. MySQL 5.7 or above is required. MySQL 5.6 or below **will not work**.
+2. Make sure either [RethinkDB](https://www.rethinkdb.com/docs/install/) or MySQL (or MariaDB or Percona) is installed and running. MySQL 5.7 or above is required. MySQL 5.6 or below **will not work**. MongoDB (v4.2 and above) also available but it is experimental on not tested in production.
 
 3. Fetch, build Tinode server and tinode-db database initializer:
  - **RethinkDb**:
 	```
-	go get -tags rethinkdb github.com/tinode/chat/server && go install -tags rethinkdb github.com/tinode/chat/server
-	go get -tags rethinkdb github.com/tinode/chat/tinode-db && go install -tags rethinkdb github.com/tinode/chat/tinode-db
+	go get -tags rethinkdb github.com/tinode/chat/server && go build -tags rethinkdb -o $GOPATH/bin/tinode github.com/tinode/chat/server
+	go get -tags rethinkdb github.com/tinode/chat/tinode-db && go build -tags rethinkdb -o $GOPATH/bin/init-db github.com/tinode/chat/tinode-db
 	```
  - **MySQL**:
 	```
-	go get -tags mysql github.com/tinode/chat/server && go install -tags mysql github.com/tinode/chat/server
-	go get -tags mysql github.com/tinode/chat/tinode-db && go install -tags mysql github.com/tinode/chat/tinode-db
+	go get -tags mysql github.com/tinode/chat/server && go build -tags mysql -o $GOPATH/bin/tinode github.com/tinode/chat/server
+	go get -tags mysql github.com/tinode/chat/tinode-db && go build -tags mysql -o $GOPATH/bin/init-db github.com/tinode/chat/tinode-db
+	```
+ - **MongoDB**:
+	```
+	go get -tags mongodb github.com/tinode/chat/server && go build -tags mongodb -o $GOPATH/bin/tinode github.com/tinode/chat/server
+	go get -tags mongodb github.com/tinode/chat/tinode-db && go build -tags mongodb -o $GOPATH/bin/init-db github.com/tinode/chat/tinode-db
+	```
+ - **All** (bundle all the above DB adapters):
+	```
+	go get -tags "mysql rethinkdb mongodb" github.com/tinode/chat/server && go build -tags "mysql rethinkdb mongodb" -o $GOPATH/bin/tinode github.com/tinode/chat/server
+	go get -tags "mysql rethinkdb mongodb" github.com/tinode/chat/tinode-db && go build -tags "mysql rethinkdb mongodb" -o $GOPATH/bin/init-db github.com/tinode/chat/tinode-db
 	```
 
-	Note the required **`-tags rethinkdb`** or **`-tags mysql`** build option.
+	Note the required **`-tags rethinkdb`**, **`-tags mysql`** or **`-tags mongodb`** build option.
 
 	You may also optionally define `main.buildstamp` for the server by adding a build option, for instance, with a timestamp:
 	```
@@ -51,7 +61,7 @@ See [instructions](./docker/README.md)
 	The value of `buildstamp` will be sent by the server to the clients.
 
 
-4. Open `tinode.conf`. Check that the database connection parameters are correct for your database. If you are using MySQL make sure [DSN](https://github.com/go-sql-driver/mysql#dsn-data-source-name) in `"mysql"` section is approprite for your MySQL installation. Option `parseTime=true` is required.
+4. Open `tinode.conf`. Check that the database connection parameters are correct for your database. If you are using MySQL make sure [DSN](https://github.com/go-sql-driver/mysql#dsn-data-source-name) in `"mysql"` section is appropriate for your MySQL installation. Option `parseTime=true` is required.
 ```js
 	"mysql": {
 		"dsn": "root@tcp(localhost)/tinode?parseTime=true",
@@ -59,11 +69,16 @@ See [instructions](./docker/README.md)
 	},
 ```
 
-5. Download javascript client for testing:
- - https://github.com/tinode/webapp/archive/master.zip
- - https://github.com/tinode/tinode-js/archive/master.zip
+5. Make sure you specify the adapter name in your `tinode.conf`. E.g. you want to run Tinode with MySQL:
+```js
+	"store_config: {
+		...
+		"use_adapter": "mysql",
+		...
+	},
+```
 
-6. Now that you have built the binaries, follow instructions in the _Installing from Binaries_ section for running the binaries except in step 3 the initializer is called `tinode-db` (`tinode-db.exe` on Windows), not `init-db`.
+6. Now that you have built the binaries, follow instructions in the _Running a Standalone Server_ section.
 
 ## Running a Standalone Server
 
@@ -76,32 +91,39 @@ See [instructions](./docker/README.md)
 	```
 	mysql.server start
 	```
+ - **MongoDB**: https://docs.mongodb.com/manual/administration/install-community/
+
+    MongoDB should run as single node replicaset. See https://docs.mongodb.com/manual/administration/replica-set-deployment/
+	```
+	mongod
+	```
 
 2. Run DB initializer
 	```
-	$GOPATH/bin/tinode-db -config=$GOPATH/src/github.com/tinode/chat/tinode-db/tinode.conf
+	$GOPATH/bin/init-db -config=$GOPATH/src/github.com/tinode/chat/tinode-db/tinode.conf
 	```
 	add `-data=$GOPATH/src/github.com/tinode/chat/tinode-db/data.json` flag if you want sample data to be loaded:
 	```
-	$GOPATH/bin/tinode-db -config=$GOPATH/src/github.com/tinode/chat/tinode-db/tinode.conf -data=$GOPATH/src/github.com/tinode/chat/tinode-db/data.json
+	$GOPATH/bin/init-db -config=$GOPATH/src/github.com/tinode/chat/tinode-db/tinode.conf -data=$GOPATH/src/github.com/tinode/chat/tinode-db/data.json
 	```
 
 	DB intializer needs to be run only once per installation. See [instructions](tinode-db/README.md) for more options.
 
-3. Unpack JS client to a directory, for instance `$HOME/tinode/example-react-js/` by first unzipping `https://github.com/tinode/webapp/archive/master.zip` then extract `tinode.js` from `https://github.com/tinode/tinode-js/archive/master.zip` to the same directory.
+3. Unpack JS client to a directory, for instance `$HOME/tinode/webapp/` by unzipping `https://github.com/tinode/webapp/archive/master.zip` and `https://github.com/tinode/tinode-js/archive/master.zip` to the same directory.
 
-4. Run server
+4. Run the server
 	```
-	$GOPATH/bin/server -config=$GOPATH/src/github.com/tinode/chat/server/tinode.conf -static_data=$HOME/tinode/example-react-js/
+	$GOPATH/bin/tinode -config=$GOPATH/src/github.com/tinode/chat/server/tinode.conf -static_data=$HOME/tinode/webapp/
 	```
 
 5. Test your installation by pointing your browser to [http://localhost:6060/](http://localhost:6060/). The static files from the `-static_data` path are served at web root `/`. You can change this by editing the line `static_mount` in the config file.
 
-6.  If you want to use the [Android client](https://github.com/tinode/tindroid) and want push notification to work, find the section `"push"` in `tinode.conf`, item `"name": "fcm"`, then change `"enabled"` to `true`. Go to [https://console.firebase.google.com/](https://console.firebase.google.com/) (https://console.firebase.google.com/project/**NAME-OF-YOUR-PROJECT**/settings/cloudmessaging) and get a server key. Paste the key to the `"api_key"` field. See more at https://github.com/tinode/tindroid.
+**Important!** If you are running Tinode alongside another webserver, such as Apache or nginx, keep in mind that you need to launch the webapp from the URL served by Tinode. Otherwise it won't work.
+
 
 ## Running a Cluster
 
-- Install RethinkDB, run it stanalone or in [cluster mode](https://www.rethinkdb.com/docs/start-a-server/#a-rethinkdb-cluster-using-multiple-machines). Run DB initializer, unpack JS files as described in the previous section.
+- Install and run the database, run DB initializer, unpack JS files as described in the previous section. Both MySQL and RethinkDB supports [cluster](https://www.mysql.com/products/cluster/) [mode](https://www.rethinkdb.com/docs/start-a-server/#a-rethinkdb-cluster-using-multiple-machines). You may consider it for added resiliency.
 
 - Cluster expects at least two nodes. A minimum of three nodes is recommended.
 
@@ -132,13 +154,18 @@ See [instructions](./docker/README.md)
   * `enabled` turns on failover mode; failover mode requires at least three nodes in the cluster.
   * `heartbeat` interval in milliseconds between heartbeats sent by the leader node to follower nodes to ensure they are accessible.
   * `vote_after` number of failed heartbeats before a new leader node is elected.
-  * `node_fail_after` number of heartbeats that a follower node misses before it's cosidered to be down.
+  * `node_fail_after` number of heartbeats that a follower node misses before it's considered to be down.
 
-If you are testing the cluster with all nodes running on the same host, you also must override the `listen` port. Here is an example for launching two cluster nodes from the same host using the same config file:
+If you are testing the cluster with all nodes running on the same host, you also must override the `listen` and `grpc_listen` ports. Here is an example for launching two cluster nodes from the same host using the same config file:
 ```
-./server -config=./tinode.conf -static_data=./example-react-js/ -listen=:6060 -cluster_self=one &
-./server -config=./tinode.conf -static_data=./example-react-js/ -listen=:6061 -cluster_self=two &
+$GOPATH/bin/tinode -config=./tinode.conf -static_data=./webapp/ -listen=:6060 -grpc_listen=:6080 -cluster_self=one &
+$GOPATH/bin/tinode -config=./tinode.conf -static_data=./webapp/ -listen=:6061 -grpc_listen=:6081 -cluster_self=two &
 ```
+A bash script [run-cluster.sh](./server/run-cluster.sh) may be found useful.
+
+### Enabling Push Notifications
+
+Follow [instructions](./docs/faq.md#q-how-to-setup-fcm-push-notifications).
 
 ### Note on Running the Server in Background
 
@@ -147,7 +174,7 @@ There is [no clean way](https://github.com/golang/go/issues/227) to daemonize a 
 Specific note for [nohup](https://en.wikipedia.org/wiki/Nohup) users: an `exit` must be issued immediately after `nohup` call to close the foreground session cleanly:
 
 ```
-nohup $GOPATH/bin/server -config=$GOPATH/src/github.com/tinode/chat/server/tinode.conf -static_data=$HOME/tinode/example-react-js/ &
+nohup $GOPATH/bin/server -config=$GOPATH/src/github.com/tinode/chat/server/tinode.conf -static_data=$HOME/tinode/webapp/ &
 exit
 ```
 

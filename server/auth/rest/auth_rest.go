@@ -1,6 +1,5 @@
+// Package rest provides authentication by calling a separate process over REST API (technically JSON RPC, not REST).
 package rest
-
-// Authentication by calling a separate process over REST API.
 
 import (
 	"bytes"
@@ -29,6 +28,7 @@ type authenticator struct {
 	useSeparateEndpoints bool
 }
 
+// Request to the server.
 type request struct {
 	Endpoint string    `json:"endpoint"`
 	Name     string    `json:"name"`
@@ -36,7 +36,7 @@ type request struct {
 	Secret   []byte    `json:"secret,omitempty"`
 }
 
-// User initialization data when creating a new user
+// User initialization data when creating a new user.
 type newAccount struct {
 	// Default access mode
 	Auth string `json:"auth,omitempty"`
@@ -47,6 +47,7 @@ type newAccount struct {
 	Private interface{} `json:"private,omitempty"`
 }
 
+// Response from the server.
 type response struct {
 	// Error message in case of an error.
 	Err string `json:"err,omitempty"`
@@ -58,12 +59,14 @@ type response struct {
 	TimeVal time.Time `json:"ts,omitempty"`
 	// Boolean value
 	BoolVal bool `json:"boolval,omitempty"`
+	// String slice value
+	StrSliceVal []string `json:"strarr,omitempty"`
 	// Account creation data
 	NewAcc *newAccount `json:"newacc,omitempty"`
 }
 
 // Init initializes the handler.
-func (a *authenticator) Init(jsonconf, name string) error {
+func (a *authenticator) Init(jsonconf json.RawMessage, name string) error {
 	if a.name != "" {
 		return errors.New("auth_rest: already initialized as " + a.name + "; " + name)
 	}
@@ -78,9 +81,9 @@ func (a *authenticator) Init(jsonconf, name string) error {
 	}
 
 	var config configType
-	err := json.Unmarshal([]byte(jsonconf), &config)
+	err := json.Unmarshal(jsonconf, &config)
 	if err != nil {
-		return errors.New("auth_rest: failed to parse config: " + err.Error() + "(" + jsonconf + ")")
+		return errors.New("auth_rest: failed to parse config: " + err.Error() + "(" + string(jsonconf) + ")")
 	}
 
 	serverUrl, err := url.Parse(config.ServerUrl)
@@ -176,6 +179,7 @@ func (a *authenticator) Authenticate(secret []byte) (*auth.Rec, []byte, error) {
 		// Create account, get UID, report UID back to the server.
 
 		user := types.User{
+			State:  resp.Record.State,
 			Public: resp.NewAcc.Public,
 			Tags:   resp.Record.Tags,
 		}
@@ -223,6 +227,23 @@ func (a *authenticator) GenSecret(rec *auth.Rec) ([]byte, time.Time, error) {
 func (a *authenticator) DelRecords(uid types.Uid) error {
 	_, err := a.callEndpoint("del", &auth.Rec{Uid: uid}, nil)
 	return err
+}
+
+// RestrictedTags returns tag namespaces restricted by the server.
+func (a *authenticator) RestrictedTags() ([]string, error) {
+	resp, err := a.callEndpoint("rtagns", nil, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return resp.StrSliceVal, nil
+}
+
+// GetResetParams returns authenticator parameters passed to password reset handler
+// (none for rest).
+func (authenticator) GetResetParams(uid types.Uid) (map[string]interface{}, error) {
+	// TODO: route request to the server.
+	return nil, nil
 }
 
 func init() {

@@ -9,7 +9,8 @@ Fields:
 * `Id` user id, primary key
 * `CreatedAt` timestamp when the user was created
 * `UpdatedAt` timestamp when user metadata was updated
-* `DeletedAt` currently unused
+* `State` account state: normal (ok), suspended, soft-deleted
+* `StateAt` timestamp when the state was last updated or NULL
 * `Access` user's default access level for peer-to-peer topics
  * `Auth`, `Anon` default permissions for authenticated and anonymous users
 * `Public` application-defined data
@@ -37,7 +38,8 @@ Sample:
     "Auth": 47
   } ,
   "CreatedAt": Mon Jul 24 2017 11:16:38 GMT+00:00 ,
-  "DeletedAt": null ,
+  "State": 0,
+  "StateAt": null ,
   "Devices": null ,
   "Id": "7yUCHniegrM" ,
   "LastSeen": Mon Jan 01 1 00:00:00 GMT+00:00 ,
@@ -91,7 +93,8 @@ Fields:
  * `Id` name of the topic, primary key
  * `CreatedAt` topic creation time
  * `UpdatedAt` timestamp of the last change to topic metadata
- * `DeletedAt` currently unused
+ * `State` topic state: normal (ok), suspended, soft-deleted
+ * `StateAt` timestamp when the state was last updated or NULL
  * `Access` stores topic's default access permissions
   * `Auth`, `Anon` permissions for authenticated and anonymous users respectively
  * `Owner` ID of the user who owns the topic
@@ -114,7 +117,8 @@ Sample:
  } ,
  "DelId": 0,
  "CreatedAt": Thu Oct 15 2015 04:06:51 GMT+00:00 ,
- "DeletedAt": null ,
+ "State": 0 ,
+ "StateAt": null ,
  "LastMessageAt": Sat Oct 17 2015 13:51:56 GMT+00:00 ,
  "Id":  "p2pavVGHLCBbKrvJQIeeJ6Csw" ,
  "Owner": "v2JyG4OLSoA" ,
@@ -264,7 +268,7 @@ Sample:
 ### Table `credentials`
 The tables stores user credentials used for validation.
 
-* `Id` unique credential, primary key
+* `Id` credential, primary key
 * `CreatedAt` timestamp when the record was created
 * `UpdatedAt` timestamp when the last validation attempt was performed (successful or not).
 * `Method` validation method
@@ -273,6 +277,7 @@ The tables stores user credentials used for validation.
 * `Retries` number of failed attempts at validation
 * `User` id of the user who owns this credential
 * `Value` value of the credential
+* `Closed` unvalidated credential is no longer being validated. Only one credential is not Closed for each user/method.
 
 Indexes:
 * `Id` Primary key composed either as `User`:`Method`:`Value` for unconfirmed credentials or as `Method`:`Value` for confirmed.
@@ -281,15 +286,15 @@ Indexes:
 Sample:
 ```js
 {
-  "Id": "tel:17025550001",
+  "Id": "tel:+17025550001",
   "CreatedAt": Sun Jun 10 2018 16:37:27 GMT+00:00 ,
+  "UpdatedAt": Sun Jun 10 2018 16:37:28 GMT+00:00 ,
   "Method":  "tel" ,
   "Done": true ,
   "Resp":  "123456" ,
   "Retries": 0 ,
-  "UpdatedAt": Sun Jun 10 2018 16:37:27 GMT+00:00 ,
   "User":  "k3srBRk9RYw" ,
-  "Value":  "17025550001"
+  "Value":  "+17025550001"
 }
 ```
 

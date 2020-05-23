@@ -90,7 +90,7 @@ func (t *Topic) loadContacts(uid types.Uid) error {
 // "+dis" disable subscription withot removing it, the opposite of "en".
 // The "+en/rem/dis" command itself is stripped from the notification.
 func (t *Topic) presProcReq(fromUserID, what string, wantReply bool) string {
-	if t.isSuspended() {
+	if t.isInactive() {
 		return ""
 	}
 
@@ -198,7 +198,7 @@ func (t *Topic) presProcReq(fromUserID, what string, wantReply bool) string {
 		}
 	}
 
-	// log.Println("in-what:", debugWhat, "out-what", what, "from:", fromUserID, "to:", t.name, "reply:", replyAs)
+	// log.Println("out-what", what, "from:", fromUserID, "to:", t.name, "reply:", replyAs)
 
 	// If requester's online status has not changed, do not reply, otherwise an endless loop will happen.
 	// wantReply is needed to ensure unnecessary {pres} is not sent:
@@ -209,7 +209,7 @@ func (t *Topic) presProcReq(fromUserID, what string, wantReply bool) string {
 		globals.hub.route <- &ServerComMessage{
 			// Topic is 'me' even for group topics; group topics will use 'me' as a signal to drop the message
 			// without forwarding to sessions
-			Pres:   &MsgServerPres{Topic: "me", What: replyAs, Src: t.name, wantReply: reqReply},
+			Pres:   &MsgServerPres{Topic: "me", What: replyAs, Src: t.name, WantReply: reqReply},
 			rcptto: fromUserID}
 	}
 
@@ -222,11 +222,25 @@ func (t *Topic) presProcReq(fromUserID, what string, wantReply bool) string {
 // Case C: user agent change, "ua", ua
 // Case D: User updated 'public', "upd"
 func (t *Topic) presUsersOfInterest(what, ua string) {
+	parts := strings.Split(what, "+")
+	wantReply := parts[0] == "on"
+	goOffline := len(parts) > 1 && parts[1] == "dis"
+
 	// Push update to subscriptions
-	for topic := range t.perSubs {
+	for topic, psd := range t.perSubs {
 		globals.hub.route <- &ServerComMessage{
-			Pres:   &MsgServerPres{Topic: "me", What: what, Src: t.name, UserAgent: ua, wantReply: (what == "on")},
+			Pres: &MsgServerPres{
+				Topic:     "me",
+				What:      what,
+				Src:       t.name,
+				UserAgent: ua,
+				WantReply: wantReply},
 			rcptto: topic}
+
+		if psd.online && goOffline {
+			psd.online = false
+			t.perSubs[topic] = psd
+		}
 	}
 }
 
@@ -236,7 +250,7 @@ func presUsersOfInterestOffline(uid types.Uid, subs []types.Subscription, what s
 	// Push update to subscriptions
 	for _, sub := range subs {
 		globals.hub.route <- &ServerComMessage{
-			Pres:   &MsgServerPres{Topic: "me", What: what, Src: uid.UserId(), wantReply: false},
+			Pres:   &MsgServerPres{Topic: "me", What: what, Src: uid.UserId(), WantReply: false},
 			rcptto: sub.Topic}
 	}
 }
@@ -269,8 +283,8 @@ func (t *Topic) presSubsOnline(what, src string, params *presParams,
 		Pres: &MsgServerPres{Topic: t.xoriginal, What: what, Src: src,
 			Acs: params.packAcs(), AcsActor: actor, AcsTarget: target,
 			SeqId: params.seqID, DelId: params.delID, DelSeq: params.delSeq,
-			filterIn: int(pf.filterIn), filterOut: int(pf.filterOut),
-			singleUser: pf.singleUser, excludeUser: pf.excludeUser},
+			FilterIn: int(pf.filterIn), FilterOut: int(pf.filterOut),
+			SingleUser: pf.singleUser, ExcludeUser: pf.excludeUser},
 		rcptto: t.name, skipSid: skipSid}
 }
 
@@ -292,6 +306,17 @@ func (t *Topic) presSubsOnlineDirect(what string) {
 			msg.Pres.Topic = t.original(sess.uid)
 		}
 		sess.queueOut(msg)
+	}
+}
+
+// Communicates "topic unaccessible (cluster rehashing or node connection lost)" event
+// to a list of topics promting the client to resubscribe to the topics.
+func (s *Session) presTermDirect(subs []string) {
+	log.Printf("sid '%s', uid '%s', terminating %s", s.sid, s.uid, subs)
+	msg := &ServerComMessage{Pres: &MsgServerPres{Topic: "me", What: "term"}}
+	for _, topic := range subs {
+		msg.Pres.Src = topic
+		s.queueOut(msg)
 	}
 }
 
@@ -334,7 +359,7 @@ func (t *Topic) presSubsOffline(what string, params *presParams, filter *presFil
 			Pres: &MsgServerPres{Topic: "me", What: what, Src: t.original(uid),
 				Acs: params.packAcs(), AcsActor: actor, AcsTarget: target,
 				SeqId: params.seqID, DelId: params.delID,
-				skipTopic: skipTopic},
+				SkipTopic: skipTopic},
 			rcptto: user, skipSid: skipSid}
 	}
 }
@@ -408,7 +433,7 @@ func (t *Topic) presSingleUserOffline(uid types.Uid, what string, params *presPa
 			Pres: &MsgServerPres{Topic: "me", What: what,
 				Src: t.original(uid), SeqId: params.seqID, DelId: params.delID,
 				Acs: params.packAcs(), AcsActor: actor, AcsTarget: target, UserAgent: params.userAgent,
-				wantReply: strings.HasPrefix(what, "?unkn"), skipTopic: skipTopic},
+				WantReply: strings.HasPrefix(what, "?unkn"), SkipTopic: skipTopic},
 			rcptto: user, skipSid: skipSid}
 	}
 }

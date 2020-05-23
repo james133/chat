@@ -1,3 +1,4 @@
+// Package store provides methods for registering and accessing database adapters.
 package store
 
 import (
@@ -15,6 +16,7 @@ import (
 )
 
 var adp adapter.Adapter
+var availableAdapters = make(map[string]adapter.Adapter)
 var mediaHandler media.Handler
 
 // Unique ID generator
@@ -25,18 +27,34 @@ type configType struct {
 	UidKey []byte `json:"uid_key"`
 	// Maximum number of results to return from adapter.
 	MaxResults int `json:"max_results"`
+	// DB adapter name to use. Should be one of these specified in `Adapters`.
+	UseAdapter string `json:"use_adapter"`
 	// Configurations for individual adapters.
 	Adapters map[string]json.RawMessage `json:"adapters"`
 }
 
-func openAdapter(workerId int, jsonconf string) error {
+func openAdapter(workerId int, jsonconf json.RawMessage) error {
 	var config configType
-	if err := json.Unmarshal([]byte(jsonconf), &config); err != nil {
-		return errors.New("store: failed to parse config: " + err.Error() + "(" + jsonconf + ")")
+	if err := json.Unmarshal(jsonconf, &config); err != nil {
+		return errors.New("store: failed to parse config: " + err.Error() + "(" + string(jsonconf) + ")")
 	}
 
 	if adp == nil {
-		return errors.New("store: database adapter is missing")
+		if len(config.UseAdapter) > 0 {
+			// Adapter name specified explicitly.
+			if ad, ok := availableAdapters[config.UseAdapter]; ok {
+				adp = ad
+			} else {
+				return errors.New("store: " + config.UseAdapter + " adapter is not available in this binary")
+			}
+		} else if len(availableAdapters) == 1 {
+			// Default to the only entry in availableAdapters.
+			for _, v := range availableAdapters {
+				adp = v
+			}
+		} else {
+			return errors.New("store: db adapter is not specified. Please set `store_config.use_adapter` in `tinode.conf`")
+		}
 	}
 
 	if adp.IsOpen() {
@@ -56,9 +74,9 @@ func openAdapter(workerId int, jsonconf string) error {
 		return err
 	}
 
-	var adapterConfig string
+	var adapterConfig json.RawMessage
 	if config.Adapters != nil {
-		adapterConfig = string(config.Adapters[adp.GetName()])
+		adapterConfig = config.Adapters[adp.GetName()]
 	}
 
 	return adp.Open(adapterConfig)
@@ -67,7 +85,7 @@ func openAdapter(workerId int, jsonconf string) error {
 // Open initializes the persistence system. Adapter holds a connection pool for a database instance.
 // 	 name - name of the adapter rquested in the config file
 //   jsonconf - configuration string
-func Open(workerId int, jsonconf string) error {
+func Open(workerId int, jsonconf json.RawMessage) error {
 	if err := openAdapter(workerId, jsonconf); err != nil {
 		return err
 	}
@@ -102,10 +120,30 @@ func GetAdapterName() string {
 	return ""
 }
 
-// InitDb creates a new database instance. If 'reset' is true it will first attempt to drop
-// existing database. If jsconf is nil it will assume that the connection is already open.
-// If it's non-nil, it will use the config string to open the DB connection first.
-func InitDb(jsonconf string, reset bool) error {
+// GetAdapterVersion returns version of the current adater.
+func GetAdapterVersion() int {
+	if adp != nil {
+		return adp.Version()
+	}
+
+	return -1
+}
+
+// GetDbVersion returns version of the underlying database.
+func GetDbVersion() int {
+	if adp != nil {
+		vers, _ := adp.GetDbVersion()
+		return vers
+	}
+
+	return -1
+}
+
+// InitDb creates and configures a new database instance. If 'reset' is true it will first
+// attempt to drop an existing database. If jsconf is nil it will assume that the adapter is
+// already open. If it's non-nil and the adapter is not open, it will use the config string
+// to open the adapter first.
+func InitDb(jsonconf json.RawMessage, reset bool) error {
 	if !IsOpen() {
 		if err := openAdapter(1, jsonconf); err != nil {
 			return err
@@ -114,18 +152,30 @@ func InitDb(jsonconf string, reset bool) error {
 	return adp.CreateDb(reset)
 }
 
+// UpgradeDb performes an upgrade of the database to the current adapter version.
+// If jsconf is nil it will assume that the adapter is already open. If it's non-nil and the
+// adapter is not open, it will use the config string to open the adapter first.
+func UpgradeDb(jsonconf json.RawMessage) error {
+	if !IsOpen() {
+		if err := openAdapter(1, jsonconf); err != nil {
+			return err
+		}
+	}
+	return adp.UpgradeDb()
+}
+
 // RegisterAdapter makes a persistence adapter available.
 // If Register is called twice or if the adapter is nil, it panics.
-func RegisterAdapter(name string, a adapter.Adapter) {
+func RegisterAdapter(a adapter.Adapter) {
 	if a == nil {
 		panic("store: Register adapter is nil")
 	}
 
-	if adp != nil {
-		panic("store: adapter '" + adp.GetName() + "' is already registered")
+	adapterName := a.GetName()
+	if _, ok := availableAdapters[adapterName]; ok {
+		panic("store: adapter '" + adapterName + "' is already registered")
 	}
-
-	adp = a
+	availableAdapters[adapterName] = a
 }
 
 // GetUid generates a unique ID suitable for use as a primary key.
@@ -221,14 +271,14 @@ func (UsersObjMapper) GetAuthUniqueRecord(scheme, unique string) (types.Uid, aut
 
 // AddAuthRecord creates a new authentication record for the given user.
 func (UsersObjMapper) AddAuthRecord(uid types.Uid, authLvl auth.Level, scheme, unique string, secret []byte,
-	expires time.Time) (bool, error) {
+	expires time.Time) error {
 
 	return adp.AuthAddRecord(uid, scheme, scheme+":"+unique, authLvl, secret, expires)
 }
 
 // UpdateAuthRecord updates authentication record with a new secret and expiration time.
 func (UsersObjMapper) UpdateAuthRecord(uid types.Uid, authLvl auth.Level, scheme, unique string,
-	secret []byte, expires time.Time) (bool, error) {
+	secret []byte, expires time.Time) error {
 
 	return adp.AuthUpdRecord(uid, scheme, scheme+":"+unique, authLvl, secret, expires)
 }
@@ -258,11 +308,6 @@ func (UsersObjMapper) Delete(id types.Uid, hard bool) error {
 	return adp.UserDelete(id, hard)
 }
 
-// GetDisabled returns user IDs which were disabled (soft-deleted) since specifid time.
-func (UsersObjMapper) GetDisabled(since time.Time) ([]types.Uid, error) {
-	return adp.UserGetDisabled(since)
-}
-
 // UpdateLastSeen updates LastSeen and UserAgent.
 func (UsersObjMapper) UpdateLastSeen(uid types.Uid, userAgent string, when time.Time) error {
 	return adp.UserUpdate(uid, map[string]interface{}{"LastSeen": when, "UserAgent": userAgent})
@@ -270,17 +315,27 @@ func (UsersObjMapper) UpdateLastSeen(uid types.Uid, userAgent string, when time.
 
 // Update is a generic user data update.
 func (UsersObjMapper) Update(uid types.Uid, update map[string]interface{}) error {
-	update["UpdatedAt"] = types.TimeNow()
+	if _, ok := update["UpdatedAt"]; !ok {
+		update["UpdatedAt"] = types.TimeNow()
+	}
 	return adp.UserUpdate(uid, update)
 }
 
-// UpdateTags either resets tags to the given slice or creates a union of existing tags and the new ones.
-func (UsersObjMapper) UpdateTags(uid types.Uid, tags []string, reset bool) error {
-	return adp.UserUpdateTags(uid, tags, reset)
+// UpdateTags either adds, removes, or resets tags to the given slices.
+func (UsersObjMapper) UpdateTags(uid types.Uid, add, remove, reset []string) ([]string, error) {
+	return adp.UserUpdateTags(uid, add, remove, reset)
 }
 
-// GetSubs loads a list of subscriptions for the given user. Does not load Public, does not load
-// deleted subscriptions.
+// UpdateState changes user's state and state of some topics associated with the user.
+func (UsersObjMapper) UpdateState(uid types.Uid, state types.ObjState) error {
+	update := map[string]interface{}{
+		"State":   state,
+		"StateAt": types.TimeNow()}
+	return adp.UserUpdate(uid, update)
+}
+
+// GetSubs loads a list of subscriptions for the given user.
+// Does not load Public, does not load deleted subscriptions.
 func (UsersObjMapper) GetSubs(id types.Uid, opts *types.QueryOpt) ([]types.Subscription, error) {
 	return adp.SubsForUser(id, false, opts)
 }
@@ -295,7 +350,15 @@ func (UsersObjMapper) FindSubs(id types.Uid, required, optional []string) ([]typ
 	if err != nil {
 		return nil, err
 	}
-	return append(usubs, tsubs...), nil
+
+	allSubs := append(usubs, tsubs...)
+	for i := range allSubs {
+		// Indicate that the returned access modes are not 'N', but rather undefined.
+		allSubs[i].ModeGiven = types.ModeUnset
+		allSubs[i].ModeWant = types.ModeUnset
+	}
+
+	return allSubs, nil
 }
 
 // GetTopics load a list of user's subscriptions with Public field copied to subscription
@@ -310,48 +373,44 @@ func (UsersObjMapper) GetTopicsAny(id types.Uid, opts *types.QueryOpt) ([]types.
 }
 
 // GetOwnTopics retuens a slice of group topic names where the user is the owner.
-func (UsersObjMapper) GetOwnTopics(id types.Uid, opts *types.QueryOpt) ([]string, error) {
-	return adp.OwnTopics(id, opts)
+func (UsersObjMapper) GetOwnTopics(id types.Uid) ([]string, error) {
+	return adp.OwnTopics(id)
 }
 
-// SaveCred saves a credential validation request.
-func (UsersObjMapper) SaveCred(cred *types.Credential) error {
+// UpsertCred adds or updates a credential validation request. Return true if the record was inserted, false if updated.
+func (UsersObjMapper) UpsertCred(cred *types.Credential) (bool, error) {
 	cred.InitTimes()
-	return adp.CredAdd(cred)
+	return adp.CredUpsert(cred)
 }
 
-// ConfirmCred marks credential as confirmed.
+// ConfirmCred marks credential method as confirmed.
 func (UsersObjMapper) ConfirmCred(id types.Uid, method string) error {
 	return adp.CredConfirm(id, method)
 }
 
-// FailCred increments fail count.
+// FailCred increments fail count for the given credential method.
 func (UsersObjMapper) FailCred(id types.Uid, method string) error {
 	return adp.CredFail(id, method)
 }
 
-// GetCred gets a list of confirmed credentials.
-func (UsersObjMapper) GetCred(id types.Uid, method string) (*types.Credential, error) {
-	var creds []*types.Credential
-	var err error
-	if creds, err = adp.CredGet(id, method); err == nil {
-		if len(creds) > 0 {
-			return creds[0], nil
-		}
-		return nil, nil
-	}
-	return nil, err
-
+// GetActiveCred gets a the currently active credential for the given user and method.
+func (UsersObjMapper) GetActiveCred(id types.Uid, method string) (*types.Credential, error) {
+	return adp.CredGetActive(id, method)
 }
 
-// GetAllCred retrieves all confimed credential for the given user.
-func (UsersObjMapper) GetAllCred(id types.Uid) ([]*types.Credential, error) {
-	return adp.CredGet(id, "")
+// GetAllCreds returns credentials of the given user, all or validated only.
+func (UsersObjMapper) GetAllCreds(id types.Uid, method string, validatedOnly bool) ([]types.Credential, error) {
+	return adp.CredGetAll(id, method, validatedOnly)
 }
 
-// DelCred deletes user's credentials. If method is "" all credentials are deleted.
-func (UsersObjMapper) DelCred(id types.Uid, method string) error {
-	return adp.CredDel(id, method)
+// DelCred deletes user's credentials. If method is "", all credentials are deleted.
+func (UsersObjMapper) DelCred(id types.Uid, method, value string) error {
+	return adp.CredDel(id, method, value)
+}
+
+// GetUnreadCount returs user's total count of unread messages in all topics with the R permissions
+func (UsersObjMapper) GetUnreadCount(id types.Uid) (int, error) {
+	return adp.UserUnreadCount(id)
 }
 
 // TopicsObjMapper is a struct to hold methods for persistence mapping for the topic object.
@@ -364,7 +423,7 @@ var Topics TopicsObjMapper
 func (TopicsObjMapper) Create(topic *types.Topic, owner types.Uid, private interface{}) error {
 
 	topic.InitTimes()
-	topic.TouchedAt = &topic.CreatedAt
+	topic.TouchedAt = topic.CreatedAt
 	topic.Owner = owner.String()
 
 	err := adp.TopicCreate(topic)
@@ -388,9 +447,9 @@ func (TopicsObjMapper) Create(topic *types.Topic, owner types.Uid, private inter
 // CreateP2P creates a P2P topic by generating two user's subsciptions to each other.
 func (TopicsObjMapper) CreateP2P(initiator, invited *types.Subscription) error {
 	initiator.InitTimes()
-	initiator.SetTouchedAt(&initiator.CreatedAt)
+	initiator.SetTouchedAt(initiator.CreatedAt)
 	invited.InitTimes()
-	invited.SetTouchedAt((&invited.CreatedAt))
+	invited.SetTouchedAt(invited.CreatedAt)
 
 	return adp.TopicCreateP2P(initiator, invited)
 }
@@ -413,7 +472,7 @@ func (TopicsObjMapper) GetUsersAny(topic string, opts *types.QueryOpt) ([]types.
 }
 
 // GetSubs loads a list of subscriptions to the given topic, user.Public and deleted
-// subscriptions are not loaded
+// subscriptions are not loaded. Suspended subscriptions are loaded.
 func (TopicsObjMapper) GetSubs(topic string, opts *types.QueryOpt) ([]types.Subscription, error) {
 	return adp.SubsForTopic(topic, false, opts)
 }
@@ -426,13 +485,15 @@ func (TopicsObjMapper) GetSubsAny(topic string, opts *types.QueryOpt) ([]types.S
 
 // Update is a generic topic update.
 func (TopicsObjMapper) Update(topic string, update map[string]interface{}) error {
-	update["UpdatedAt"] = types.TimeNow()
+	if _, ok := update["UpdatedAt"]; !ok {
+		update["UpdatedAt"] = types.TimeNow()
+	}
 	return adp.TopicUpdate(topic, update)
 }
 
 // OwnerChange replaces the old topic owner with the new owner.
-func (TopicsObjMapper) OwnerChange(topic string, newOwner, oldOwner types.Uid) error {
-	return adp.TopicOwnerChange(topic, newOwner, oldOwner)
+func (TopicsObjMapper) OwnerChange(topic string, newOwner types.Uid) error {
+	return adp.TopicOwnerChange(topic, newOwner)
 }
 
 // Delete deletes topic, messages, attachments, and subscriptions.
@@ -452,8 +513,7 @@ func (SubsObjMapper) Create(subs ...*types.Subscription) error {
 		sub.InitTimes()
 	}
 
-	_, err := adp.TopicShare(subs)
-	return err
+	return adp.TopicShare(subs)
 }
 
 // Get given subscription
@@ -483,7 +543,7 @@ var Messages MessagesObjMapper
 // Save message
 func (MessagesObjMapper) Save(msg *types.Message, readBySender bool) error {
 	msg.InitTimes()
-
+	msg.SetUid(GetUid())
 	// Increment topic's or user's SeqId
 	err := adp.TopicUpdateOnMessage(msg.Topic, msg)
 	if err != nil {
@@ -544,6 +604,7 @@ func (MessagesObjMapper) DeleteList(topic string, delID int, forUser types.Uid, 
 			DelId:       delID,
 			DeletedFor:  forUser.String(),
 			SeqIdRanges: ranges}
+		toDel.SetUid(GetUid())
 		toDel.InitTimes()
 	}
 

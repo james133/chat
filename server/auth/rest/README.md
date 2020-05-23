@@ -36,21 +36,41 @@ Request and response payloads are formatted as JSON. Some of the request or resp
 		- [`upd` Update authentication record.](#upd-update-authentication-record)
 			- [Sample request](#sample-request)
 			- [Sample response](#sample-response)
+		- [`rtagns` Get a list of restricted tag namespaces.](#get-a-list-of-restricted-tag-namespaces)
+			- [Sample request](#sample-request)
+			- [Sample response](#sample-response)
 
 <!-- /TOC -->
 
 ## Configuration
 
+Add the following section to the `auth_config` in [tinode.conf](../../tinode.conf):
+
 ```js
-{
-  // ServerUrl is the URL of the authentication server to call.
-  "server_url": "http://127.0.0.1:5000/",
-  // Server may create new accounts.
-  "allow_new_accounts": true,
-  // Use separate endpoints, i.e. add request name to serverUrl path when making requests:
-  // http://127.0.0.1:5000/add
-  "use_separae_endpoints": true
-}
+...
+"auth_config": {
+  ...
+  "rest": {
+    // ServerUrl is the URL of the authentication server to call.
+    "server_url": "http://127.0.0.1:5000/",
+    // Authentication server is allowed to create new accounts.
+    "allow_new_accounts": true,
+    // Use separate endpoints, i.e. add request name to serverUrl path when making requests:
+    // http://127.0.0.1:5000/add
+    "use_separate_endpoints": true
+  },
+  ...
+},
+```
+If you want to use your authenticator **instead** of stock `basic` (login-password) authentication, add a logical renaming:
+```js
+...
+"auth_config": {
+  "logical_names": ["basic:rest"],
+  "rest": { ... },
+  ...
+},
+...
 ```
 
 ## Request
@@ -65,8 +85,9 @@ Request and response payloads are formatted as JSON. Some of the request or resp
       "authlvl": "auth",    // authentication level
       "lifetime": "10000s", // lifetime of this record
                             // see https://golang.org/pkg/time/#Duration for format.
-    	"features": 2,        // bitmap of features
-    	"tags": ["email:alice@example.com"] // Tags associated with this authentication record.
+       "features": 2,       // bitmap of features
+       "tags": ["email:alice@example.com"], // Tags associated with this authentication record.
+       "state": "ok",       // optional account state.
     }
   }
 }
@@ -83,6 +104,7 @@ Request and response payloads are formatted as JSON. Some of the request or resp
   "byteval": "Ym9iOmJvYjEyMw==",    // array of bytes, optional
   "ts": "2018-12-04T15:17:02.627Z", // time stamp, optional
   "boolval": true,                  // boolean value, optional
+  "strarr": ["abc", "def"],         // array of strings, optoional
   "newacc": {        // data to use for creating a new account.
     // Default access mode
     "auth": "JRWPS",
@@ -165,7 +187,8 @@ The server may optionally return a challenge as `byteval`.
 {
   "rec": {
     "uid": "LELEQHDWbgY",
-    "authlvl": "auth"
+    "authlvl": "auth",
+    "state": "ok"
   },
   "byteval": "9X6m3tWeBEMlDxlcFAABAAEAbVs"
 }
@@ -181,6 +204,7 @@ The server may optionally return a challenge as `byteval`.
     "tags": ["email:alice@example.com", "uname:alice"]
   },
   "newacc": {
+    "state": "suspended",
     "auth": "JRWPS",
     "anon": "N",
     "public": {/* see /docs/API.md#public-and-private-fields */},
@@ -293,4 +317,22 @@ If accounts are managed by the server, the server should respond with an error `
 #### Sample response
 ```json
 {}
+```
+
+### `rtagns` Get a list of restricted tag namespaces.
+
+Server may enforce certain tag namespaces to be restricted, i.e. not editable by the user.
+
+#### Sample request
+```json
+{
+  "endpoint": "rtagns",
+}
+```
+
+#### Sample response
+```json
+{
+  "strarr": ["basic", "email", "tel"]
+}
 ```

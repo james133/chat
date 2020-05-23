@@ -1,6 +1,5 @@
+// Package basic is an authenticator by login-password.
 package basic
-
-// Authentication by login-password.
 
 import (
 	"encoding/json"
@@ -63,7 +62,11 @@ func parseSecret(bsecret []byte) (uname, password string, err error) {
 }
 
 // Init initializes the basic authenticator.
-func (a *authenticator) Init(jsonconf, name string) error {
+func (a *authenticator) Init(jsonconf json.RawMessage, name string) error {
+	if name == "" {
+		return errors.New("auth_basic: authenticator name cannot be blank")
+	}
+
 	if a.name != "" {
 		return errors.New("auth_basic: already initialized as " + a.name + "; " + name)
 	}
@@ -76,8 +79,8 @@ func (a *authenticator) Init(jsonconf, name string) error {
 	}
 
 	var config configType
-	if err := json.Unmarshal([]byte(jsonconf), &config); err != nil {
-		return errors.New("auth_basic: failed to parse config: " + err.Error() + "(" + jsonconf + ")")
+	if err := json.Unmarshal(jsonconf, &config); err != nil {
+		return errors.New("auth_basic: failed to parse config: " + err.Error() + "(" + string(jsonconf) + ")")
 	}
 	a.name = name
 	a.addToTags = config.AddToTags
@@ -125,10 +128,8 @@ func (a *authenticator) AddRecord(rec *auth.Rec, secret []byte) (*auth.Rec, erro
 		authLevel = auth.LevelAuth
 	}
 
-	dup, err := store.Users.AddAuthRecord(rec.Uid, authLevel, a.name, uname, passhash, expires)
-	if dup {
-		return nil, types.ErrDuplicate
-	} else if err != nil {
+	err = store.Users.AddAuthRecord(rec.Uid, authLevel, a.name, uname, passhash, expires)
+	if err != nil {
 		return nil, err
 	}
 
@@ -174,7 +175,7 @@ func (a *authenticator) UpdateRecord(rec *auth.Rec, secret []byte) (*auth.Rec, e
 	if rec.Lifetime > 0 {
 		expires = types.TimeNow().Add(rec.Lifetime)
 	}
-	_, err = store.Users.UpdateAuthRecord(rec.Uid, auth.LevelAuth, a.name, uname, passhash, expires)
+	err = store.Users.UpdateAuthRecord(rec.Uid, auth.LevelAuth, a.name, uname, passhash, expires)
 	if err != nil {
 		return nil, err
 	}
@@ -214,7 +215,7 @@ func (a *authenticator) Authenticate(secret []byte) (*auth.Rec, []byte, error) {
 		return nil, nil, types.ErrExpired
 	}
 
-	err = bcrypt.CompareHashAndPassword([]byte(passhash), []byte(password))
+	err = bcrypt.CompareHashAndPassword(passhash, []byte(password))
 	if err != nil {
 		// Invalid password
 		return nil, nil, types.ErrFailed
@@ -228,7 +229,8 @@ func (a *authenticator) Authenticate(secret []byte) (*auth.Rec, []byte, error) {
 		Uid:       uid,
 		AuthLevel: authLvl,
 		Lifetime:  lifetime,
-		Features:  0}, nil, nil
+		Features:  0,
+		State:     types.StateUndefined}, nil, nil
 }
 
 // IsUnique checks login uniqueness.
@@ -258,8 +260,34 @@ func (authenticator) GenSecret(rec *auth.Rec) ([]byte, time.Time, error) {
 	return nil, time.Time{}, types.ErrUnsupported
 }
 
+// DelRecords deletes saved authentication records of the given user.
 func (a *authenticator) DelRecords(uid types.Uid) error {
 	return store.Users.DelAuthRecords(uid, a.name)
+}
+
+// RestrictedTags returns tag namespaces restricted in this config.
+func (a *authenticator) RestrictedTags() ([]string, error) {
+	var tags []string
+	if a.addToTags {
+		tags = []string{a.name}
+	}
+	return tags, nil
+}
+
+// GetResetParams returns authenticator parameters passed to password reset handler.
+func (a *authenticator) GetResetParams(uid types.Uid) (map[string]interface{}, error) {
+	login, _, _, _, err := store.Users.GetAuthRecord(uid, a.name)
+	if err != nil {
+		return nil, err
+	}
+	// User does not have a record matching the authentication scheme.
+	if login == "" {
+		return nil, types.ErrNotFound
+	}
+
+	params := make(map[string]interface{})
+	params["login"] = login
+	return params, nil
 }
 
 func init() {
